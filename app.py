@@ -1,176 +1,200 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
+import hashlib
+from supabase import create_client
 
+# --------------------------
+# CONFIG & CONEXIÓN
+# --------------------------
 st.set_page_config(page_title="App Contable PRO", layout="wide")
 
-# --------------------------
-# BASES DE DATOS (Session State)
-# --------------------------
-if "data" not in st.session_state:
-    st.session_state.data = []
-
-if "productos" not in st.session_state:
-    st.session_state.productos = []
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error("Error de conexión: Verifica tus secrets de Supabase.")
 
 # --------------------------
-# PLAN DE CUENTAS EXTENDIDO
+# LÓGICA DE DATOS
+# --------------------------
+def hash_password(pwd): return hashlib.sha256(pwd.encode()).hexdigest()
+
+def login(username, password):
+    res = supabase.table("usuarios").select("*").eq("username", username).eq("password", hash_password(password)).execute()
+    return res.data
+
+def guardar_movimiento(user, data):
+    data["username"] = user
+    supabase.table("movimientos").insert(data).execute()
+
+def obtener_movimientos(user):
+    res = supabase.table("movimientos").select("*").eq("username", user).execute()
+    return pd.DataFrame(res.data)
+
+def obtener_inventario(user):
+    res = supabase.table("inventario").select("*").eq("username", user).execute()
+    return pd.DataFrame(res.data)
+
+def actualizar_stock(user, producto, cantidad):
+    inv = obtener_inventario(user)
+    nueva_cant = inv[inv["producto"] == producto].iloc[0]["cantidad"] - cantidad
+    supabase.table("inventario").update({"cantidad": nueva_cant}).eq("username", user).eq("producto", producto).execute()
+
+# --------------------------
+# PLAN DE CUENTAS
 # --------------------------
 cuentas = {
-    "ingreso": ["ventas", "ingresos por servicios", "ingresos financieros", "otros ingresos"],
+    "activo": ["bancos", "inventarios", "cuentas por cobrar", "propiedad planta y equipo"],
+    "pasivo": ["proveedores", "obligaciones financieras", "cuentas por pagar", "pasivos financieros"],
+    "patrimonio": ["capital", "utilidades acumuladas"],
+    "ingreso": ["ventas", "otros ingresos"],
     "costo": ["costo de ventas"],
-    "gasto": ["gastos administrativos", "gastos de ventas", "arriendo", "servicios públicos", "nómina", "depreciación", "gastos financieros", "impuestos", "otros gastos"],
-    "activo": ["efectivo", "bancos", "cuentas por cobrar", "inventarios", "propiedad planta y equipo", "equipos de cómputo", "vehículos", "otros activos"],
-    "pasivo": ["cuentas por pagar", "proveedores", "pasivos financieros", "impuestos por pagar", "obligaciones laborales", "otros pasivos"],
-    "patrimonio": ["capital", "utilidades retenidas", "resultado del ejercicio"]
+    "gasto": ["nómina", "arriendo", "servicios", "depreciación"]
 }
 
-# --------------------------
-# SIDEBAR
-# --------------------------
-st.sidebar.title("📌 Panel de Control")
-menu = st.sidebar.selectbox("Selecciona una opción", ["Inicio", "Registro", "Inventario", "Reportes"])
+def calcular_valor(row):
+    if row["tipo_cuenta"] in ["activo", "gasto", "costo"]:
+        return row["valor"] if row["naturaleza"] == "debito" else -row["valor"]
+    return row["valor"] if row["naturaleza"] == "credito" else -row["valor"]
 
 # --------------------------
-# LÓGICA DE INICIO
+# INTERFAZ (SESSION STATE)
 # --------------------------
-if menu == "Inicio":
-    st.title("💼 Sistema Contable Profesional")
-    st.write("Bienvenido. Utilice el menú lateral para registrar movimientos o consultar los Estados Financieros.")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Registros totales", len(st.session_state.data))
-    col2.metric("Items en Inventario", len(st.session_state.productos))
+if "user" not in st.session_state: st.session_state.user = None
 
-# --------------------------
-# REGISTRO CONTABLE
-# --------------------------
-elif menu == "Registro":
-    st.title("📥 Registro de Operaciones")
-    
-    with st.form("registro_form"):
-        col_a, col_b = st.columns(2)
-        tipo_cuenta = col_a.selectbox("Categoría", list(cuentas.keys()))
-        cuenta = col_a.selectbox("Subcuenta", cuentas[tipo_cuenta])
-        valor = col_b.number_input("Monto ($)", min_value=0.0, step=100.0)
-        fecha = col_b.date_input("Fecha de transacción", value=date.today())
-        
-        submit = st.form_submit_button("Confirmar Registro")
-        
-        if submit:
-            st.session_state.data.append({
-                "fecha": pd.to_datetime(fecha),
-                "tipo_cuenta": tipo_cuenta,
-                "cuenta": cuenta,
-                "valor": valor
-            })
-            st.success(f"Registrado: {cuenta} por ${valor:,.2f}")
-
-    if st.session_state.data:
-        st.subheader("Historial Reciente")
-        st.dataframe(pd.DataFrame(st.session_state.data).sort_values("fecha", ascending=False), use_container_width=True)
-
-# --------------------------
-# INVENTARIO
-# --------------------------
-elif menu == "Inventario":
-    st.title("📦 Control de Existencias")
-    
-    with st.expander("Añadir nuevo producto"):
-        c1, c2, c3 = st.columns(3)
-        nombre = c1.text_input("Nombre del ítem")
-        cantidad = c2.number_input("Cantidad", min_value=0)
-        costo = c3.number_input("Costo Unitario", min_value=0.0)
-        
-        if st.button("Registrar en Inventario"):
-            st.session_state.productos.append({"producto": nombre, "cantidad": cantidad, "costo": costo})
+if not st.session_state.user:
+    st.title("🔐 Acceso")
+    user = st.text_input("Usuario")
+    pwd = st.text_input("Contraseña", type="password")
+    if st.button("Ingresar"):
+        if login(user, pwd):
+            st.session_state.user = user
             st.rerun()
+        else: st.error("Fallo de inicio")
+else:
+    st.sidebar.success(f"Usuario: {st.session_state.user}")
+    if st.sidebar.button("Salir"):
+        st.session_state.user = None
+        st.rerun()
+    
+    menu = st.sidebar.selectbox("Navegación", ["Registro", "Inventario", "Reportes"])
 
-    if st.session_state.productos:
-        df_inv = pd.DataFrame(st.session_state.productos)
-        df_inv["Valor Total"] = df_inv["cantidad"] * df_inv["costo"]
-        st.table(df_inv)
+    # --- REGISTRO ---
+    if menu == "Registro":
+        st.title("📥 Nuevo Asiento")
+        with st.form("f"):
+            tipo = st.selectbox("Tipo", list(cuentas.keys()))
+            cta = st.selectbox("Cuenta", cuentas[tipo])
+            val = st.number_input("Monto", min_value=0.0)
+            nat = st.selectbox("Naturaleza", ["debito", "credito"])
+            if st.form_submit_button("Guardar"):
+                guardar_movimiento(st.session_state.user, {"fecha": str(date.today()), "tipo_cuenta": tipo, "cuenta": cta, "valor": val, "naturaleza": nat})
+                st.success("Registrado")
 
-# --------------------------
-# REPORTES (ESTADOS FINANCIEROS)
-# --------------------------
-elif menu == "Reportes":
-    st.title("📊 Estados Financieros Detallados")
-
-    if not st.session_state.data:
-        st.warning("No hay registros contables para generar reportes.")
-    else:
-        df = pd.DataFrame(st.session_state.data)
+    # --- INVENTARIO ---
+    elif menu == "Inventario":
+        st.title("📦 Almacén")
+        df_inv = obtener_inventario(st.session_state.user)
+        if not df_inv.empty:
+            st.dataframe(df_inv)
+            st.subheader("Vender Producto")
+            p_sel = st.selectbox("Producto", df_inv["producto"])
+            c_v = st.number_input("Cant", min_value=1.0)
+            if st.button("Vender"):
+                row = df_inv[df_inv["producto"] == p_sel].iloc[0]
+                if row["cantidad"] >= c_v:
+                    actualizar_stock(st.session_state.user, p_sel, c_v)
+                    ing, cos = (c_v * row["precio"]), (c_v * row["costo"])
+                    asientos = [("ingreso","ventas",ing,"credito"), ("activo","bancos",ing,"debito"), ("costo","costo de ventas",cos,"debito"), ("activo","inventarios",cos,"credito")]
+                    for t, c, v, n in asientos:
+                        guardar_movimiento(st.session_state.user, {"fecha":str(date.today()), "tipo_cuenta":t, "cuenta":c, "valor":v, "naturaleza":n})
+                    st.success("Venta Exitosa")
+                    st.rerun()
+    
+    # --- REPORTES (ESTADOS FINANCIEROS DESGLOSADOS) ---
+    elif menu == "Reportes":
+        st.title("📊 Estados Financieros Detallados")
+        df = obtener_movimientos(st.session_state.user)
         
-        # Filtros de fecha
-        col_f1, col_f2 = st.columns(2)
-        f_inicio = pd.to_datetime(col_f1.date_input("Desde", value=date(2025,1,1)))
-        f_fin = pd.to_datetime(col_f2.date_input("Hasta", value=date.today()))
-
-        # --- 1. ESTADO DE RESULTADOS ---
-        st.markdown("---")
-        st.header("1. Estado de Resultados Integral")
-        df_er = df[(df["fecha"] >= f_inicio) & (df["fecha"] <= f_fin)]
-        
-        def obtener_tabla(tipo):
-            res = df_er[df_er["tipo_cuenta"] == tipo].groupby("cuenta")["valor"].sum().reset_index()
-            return res.rename(columns={"cuenta": "Cuenta", "valor": "Monto"})
-
-        ingresos_df = obtener_tabla("ingreso")
-        costos_df = obtener_tabla("costo")
-        gastos_df = obtener_tabla("gasto")
-
-        col_er1, col_er2 = st.columns([2, 1])
-        with col_er1:
-            st.write("**INGRESOS**")
-            st.table(ingresos_df)
-            st.write("**COSTOS Y GASTOS**")
-            st.table(pd.concat([costos_df, gastos_df]))
-
-        total_ing = ingresos_df["Monto"].sum()
-        total_cg = costos_df["Monto"].sum() + gastos_df["Monto"].sum()
-        utilidad_neta = total_ing - total_cg
-
-        with col_er2:
-            st.metric("Utilidad / Pérdida", f"$ {utilidad_neta:,.2f}")
-
-        # --- 2. BALANCE GENERAL ---
-        st.markdown("---")
-        st.header("2. Estado de Situación Financiera")
-        
-        df_bal = df[df["fecha"] <= f_fin]
-        
-        activos_df = df_bal[df_bal["tipo_cuenta"] == "activo"].groupby("cuenta")["valor"].sum().reset_index()
-        pasivos_df = df_bal[df_bal["tipo_cuenta"] == "pasivo"].groupby("cuenta")["valor"].sum().reset_index()
-        patrimonio_df = df_bal[df_bal["tipo_cuenta"] == "patrimonio"].groupby("cuenta")["valor"].sum().reset_index()
-
-        c_bal1, c_bal2 = st.columns(2)
-        
-        with c_bal1:
-            st.subheader("Activos")
-            st.table(activos_df.rename(columns={"cuenta":"Cuenta", "valor":"Monto"}))
-            st.info(f"**Total Activos: $ {activos_df['valor'].sum():,.2f}**")
-
-        with c_bal2:
-            st.subheader("Pasivos")
-            st.table(pasivos_df.rename(columns={"cuenta":"Cuenta", "valor":"Monto"}))
-            st.write(f"Total Pasivos: $ {pasivos_df['valor'].sum():,.2f}")
+        if df.empty:
+            st.warning("No hay datos para mostrar.")
+        else:
+            df["val_adj"] = df.apply(calcular_valor, axis=1)
+            t1, t2, t3 = st.tabs(["📉 Estado de Resultados", "⚖️ Situación Financiera", "💸 Flujo de Efectivo"])
             
-            st.subheader("Patrimonio")
-            st.table(patrimonio_df.rename(columns={"cuenta":"Cuenta", "valor":"Monto"}))
-            st.write(f"Resultado del Ejercicio: $ {utilidad_neta:,.2f}")
-            
-            total_pp = pasivos_df['valor'].sum() + patrimonio_df['valor'].sum() + utilidad_neta
-            st.success(f"**Total Pasivo + Pat: $ {total_pp:,.2f}**")
+            # --- 1. ESTADO DE RESULTADOS ---
+            with t1:
+                st.subheader("Estado de Resultados Integral")
+                
+                # Desglose de cuentas
+                df_res = df[df["tipo_cuenta"].isin(["ingreso", "costo", "gasto"])]
+                res_resumen = df_res.groupby(["tipo_cuenta", "cuenta"])["val_adj"].sum().reset_index()
+                
+                ing_t = res_resumen[res_resumen["tipo_cuenta"]=="ingreso"]["val_adj"].sum()
+                cos_t = res_resumen[res_resumen["tipo_cuenta"]=="costo"]["val_adj"].sum()
+                gas_t = res_resumen[res_resumen["tipo_cuenta"]=="gasto"]["val_adj"].sum()
+                utilidad_neta = ing_t - cos_t - gas_t
+                
+                st.dataframe(res_resumen.rename(columns={"tipo_cuenta":"Categoría", "cuenta":"Cuenta", "val_adj":"Saldo"}), use_container_width=True)
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Ingresos Totales", f"$ {ing_t:,.2f}")
+                c2.metric("Costos/Gastos", f"$ {cos_t + gas_t:,.2f}")
+                c3.metric("Utilidad Neta", f"$ {utilidad_neta:,.2f}", delta_color="normal")
 
-        # --- 3. FLUJO DE EFECTIVO ---
-        st.markdown("---")
-        st.header("3. Flujo de Efectivo")
-        
-        entradas = total_ing
-        salidas = total_cg
-        
-        f1, f2, f3 = st.columns(3)
-        f1.metric("Entradas de Efectivo", f"$ {entradas:,.2f}")
-        f2.metric("Salidas de Efectivo", f"$ {salidas:,.2f}")
-        f3.metric("Flujo Neto", f"$ {entradas - salidas:,.2f}")
+            # --- 2. SITUACIÓN FINANCIERA (BALANCE) ---
+            with t2:
+                st.subheader("Estado de Situación Financiera")
+                
+                # Desglose de Activos, Pasivos y Patrimonio
+                df_bal = df[df["tipo_cuenta"].isin(["activo", "pasivo", "patrimonio"])]
+                bal_resumen = df_bal.groupby(["tipo_cuenta", "cuenta"])["val_adj"].sum().reset_index()
+                
+                act_t = bal_resumen[bal_resumen["tipo_cuenta"]=="activo"]["val_adj"].sum()
+                pas_t = bal_resumen[bal_resumen["tipo_cuenta"]=="pasivo"]["val_adj"].sum()
+                pat_t = bal_resumen[bal_resumen["tipo_cuenta"]=="patrimonio"]["val_adj"].sum() + utilidad_neta
+                
+                col_act, col_pas = st.columns(2)
+                
+                with col_act:
+                    st.write("**ACTIVOS**")
+                    st.table(bal_resumen[bal_resumen["tipo_cuenta"]=="activo"][["cuenta", "val_adj"]].rename(columns={"cuenta":"Cuenta", "val_adj":"Monto"}))
+                    st.write(f"**Total Activos: $ {act_t:,.2f}**")
+                
+                with col_pas:
+                    st.write("**PASIVOS**")
+                    st.table(bal_resumen[bal_resumen["tipo_cuenta"]=="pasivo"][["cuenta", "val_adj"]])
+                    st.write(f"**Total Pasivos: $ {pas_t:,.2f}**")
+                    st.divider()
+                    st.write("**PATRIMONIO**")
+                    st.table(bal_resumen[bal_resumen["tipo_cuenta"]=="patrimonio"][["cuenta", "val_adj"]])
+                    st.write(f"Utilidad del Ejercicio: $ {utilidad_neta:,.2f}")
+                    st.write(f"**Total Patrimonio: $ {pat_t:,.2f}**")
+                
+                st.divider()
+                st.info(f"Ecuación: Activo ({act_t:,.2f}) = Pasivo + Patrimonio ({(pas_t + pat_t):,.2f})")
+                if abs(act_t - (pas_t + pat_t)) < 0.01: st.success("Balance Cuadrado ✅")
+                else: st.error("Balance Descuadrado ❌")
+
+            # --- 3. FLUJO DE EFECTIVO ---
+            with t3:
+                st.subheader("Estado de Flujo de Efectivo (Método Directo)")
+                # Filtramos solo movimientos que afectaron 'bancos'
+                df_efectivo = df[df["cuenta"] == "bancos"].copy()
+                
+                if not df_efectivo.empty:
+                    df_efectivo["Tipo"] = df_efectivo["naturaleza"].apply(lambda x: "Entrada" if x=="debito" else "Salida")
+                    entradas = df_efectivo[df_efectivo["Tipo"]=="Entrada"]["valor"].sum()
+                    salidas = df_efectivo[df_efectivo["Tipo"]=="Salida"]["valor"].sum()
+                    
+                    st.write("**Detalle de Movimientos de Caja:**")
+                    st.dataframe(df_efectivo[["fecha", "Tipo", "valor"]].sort_values("fecha"), use_container_width=True)
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.write(f"Total Entradas: $ {entradas:,.2f}")
+                    c2.write(f"Total Salidas: $ {salidas:,.2f}")
+                    c3.subheader(f"Saldo Final: $ {entradas - salidas:,.2f}")
+                else:
+                    st.info("No hay movimientos de efectivo registrados en la cuenta 'bancos'.")
