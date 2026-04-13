@@ -113,7 +113,7 @@ else:
             return row["valor"] if row["naturaleza"] == "credito" else -row["valor"]
 
     # --------------------------
-    # REGISTRO
+    # REGISTRO (CON CONCEPTO)
     # --------------------------
     if menu == "Registro":
         st.title("📥 Registro Contable")
@@ -125,6 +125,7 @@ else:
         with col2:
             naturaleza = st.selectbox("Movimiento", ["debito", "credito"])
             fecha = st.date_input("Fecha")
+            # El campo sigue aquí para que el usuario escriba la descripción
             concepto = st.text_input("Concepto o descripción")
 
         if st.button("Guardar"):
@@ -134,7 +135,7 @@ else:
                 "cuenta": cuenta,
                 "valor": valor,
                 "naturaleza": naturaleza,
-                "concepto": concepto
+                "concepto": concepto # Se guarda en la DB
             })
             st.success("Movimiento guardado")
 
@@ -165,7 +166,6 @@ else:
                     ingreso = cant_v * row["precio"]
                     costo_v = cant_v * row["costo"]
                     
-                    # Registros automáticos con concepto
                     txt = f"Venta {prod_sel}"
                     guardar_movimiento(st.session_state.user, {"fecha": str(date.today()), "tipo_cuenta": "ingreso", "cuenta": "ventas", "valor": ingreso, "naturaleza": "credito", "concepto": txt})
                     guardar_movimiento(st.session_state.user, {"fecha": str(date.today()), "tipo_cuenta": "activo", "cuenta": "bancos", "valor": ingreso, "naturaleza": "debito", "concepto": txt})
@@ -175,31 +175,27 @@ else:
                     st.rerun()
 
     # --------------------------
-    # REPORTES
+    # REPORTES (SIN COLUMNA CONCEPTO)
     # --------------------------
     elif menu == "Reportes":
-    st.title("📊 Reportes")
-    df = obtener_movimientos(st.session_state.user)
-    if df.empty:
-        st.info("No hay movimientos registrados.")
-    else:
-        df["fecha"] = pd.to_datetime(df["fecha"], errors='coerce')  # Convertir a datetime y manejar errores
-        df["valor_ajustado"] = df.apply(calcular_valor, axis=1)
-
-        # Modifica aquí para excluir "naturaleza"
-        cols_deseadas = ["fecha", "tipo_cuenta", "cuenta", "concepto", "valor"]
-        cols_reales = [c for c in cols_deseadas if c in df.columns]
-
-        if not cols_reales:
-            st.error("No hay columnas disponibles para mostrar.")
-            st.write(f"Columnas disponibles en el DataFrame: {df.columns.tolist()}")
+        st.title("📊 Reportes")
+        df = obtener_movimientos(st.session_state.user)
+        if df.empty:
+            st.info("No hay movimientos registrados.")
         else:
+            df["fecha"] = pd.to_datetime(df["fecha"])
+            df["valor_ajustado"] = df.apply(calcular_valor, axis=1)
+
+            # Aquí filtramos para que NO se vea la columna concepto
+            # Solo incluimos las columnas que queremos mostrar visualmente
+            cols_visibles = ["fecha", "tipo_cuenta", "cuenta", "valor", "naturaleza"]
+            
             with st.expander("Ver detalle"):
-                st.dataframe(df[cols_reales], use_container_width=True)
+                # Mostramos solo las columnas seleccionadas
+                st.dataframe(df[cols_visibles], use_container_width=True)
 
             ing = df[df["tipo_cuenta"] == "ingreso"]["valor_ajustado"].sum()
             cos = df[df["tipo_cuenta"] == "costo"]["valor_ajustado"].sum()
             gas = df[df["tipo_cuenta"] == "gasto"]["valor_ajustado"].sum()
             
             st.metric("Utilidad Neta", f"${ing - cos - gas:,.2f}")
-            
