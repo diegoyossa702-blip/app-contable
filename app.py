@@ -14,7 +14,6 @@ st.set_page_config(page_title="App Contable PRO", layout="wide")
 # --------------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --------------------------
@@ -67,9 +66,7 @@ def guardar_producto(user, producto, cantidad, costo, precio):
 def actualizar_stock(user, producto, cantidad):
     inv = obtener_inventario(user)
     row = inv[inv["producto"] == producto].iloc[0]
-
     nueva_cantidad = row["cantidad"] - cantidad
-
     supabase.table("inventario")\
         .update({"cantidad": nueva_cantidad})\
         .eq("username", user)\
@@ -86,11 +83,8 @@ if "user" not in st.session_state:
 # LOGIN / REGISTRO
 # --------------------------
 if not st.session_state.user:
-
     st.title("🔐 Login / Registro")
-
     opcion = st.selectbox("Opción", ["Login", "Registro"])
-
     user = st.text_input("Usuario")
     pwd = st.text_input("Contraseña", type="password")
 
@@ -108,12 +102,10 @@ if not st.session_state.user:
                 st.error("Credenciales incorrectas")
 
 # --------------------------
-# APP
+# APP PRINCIPAL
 # --------------------------
 else:
-
     st.sidebar.success(f"👤 {st.session_state.user}")
-
     if st.sidebar.button("Cerrar sesión"):
         st.session_state.user = None
         st.rerun()
@@ -124,26 +116,23 @@ else:
     # PLAN DE CUENTAS
     # --------------------------
     cuentas = {
-        "activo": ["bancos", "inventarios"],
-        "pasivo": ["proveedores", "obligaciones financieras"],
-        "patrimonio": ["capital"],
-        "ingreso": ["ventas"],
+        "activo": ["bancos", "inventarios", "cuentas por cobrar", "propiedad planta y equipo"],
+        "pasivo": ["proveedores", "obligaciones financieras", "pasivos financieros"],
+        "patrimonio": ["capital", "utilidades acumuladas"],
+        "ingreso": ["ventas", "otros ingresos"],
         "costo": ["costo de ventas"],
-        "gasto": ["nómina", "arriendo", "servicios"]
+        "gasto": ["nómina", "arriendo", "servicios", "depreciación"]
     }
 
     def calcular_valor(row):
-        if row["tipo_cuenta"] in ["activo", "gasto"]:
+        if row["tipo_cuenta"] in ["activo", "gasto", "costo"]:
             return row["valor"] if row["naturaleza"] == "debito" else -row["valor"]
         else:
             return row["valor"] if row["naturaleza"] == "credito" else -row["valor"]
 
-    # --------------------------
-    # REGISTRO CONTABLE
-    # --------------------------
+    # --- SECCIÓN REGISTRO ---
     if menu == "Registro":
         st.title("📥 Registro Contable")
-
         tipo = st.selectbox("Tipo de cuenta", list(cuentas.keys()))
         cuenta = st.selectbox("Cuenta", cuentas[tipo])
         valor = st.number_input("Valor", min_value=0.0)
@@ -160,114 +149,105 @@ else:
             })
             st.success("Movimiento guardado")
 
-    # --------------------------
-    # INVENTARIO
-    # --------------------------
+    # --- SECCIÓN INVENTARIO ---
     elif menu == "Inventario":
         st.title("📦 Inventario")
-
         with st.expander("➕ Agregar producto"):
             prod = st.text_input("Nombre del producto")
             cant = st.number_input("Cantidad", min_value=0.0)
             costo = st.number_input("Costo unitario", min_value=0.0)
             precio = st.number_input("Precio de venta", min_value=0.0)
-
             if st.button("Guardar producto"):
                 guardar_producto(st.session_state.user, prod, cant, costo, precio)
                 st.success("Producto guardado")
 
         df_inv = obtener_inventario(st.session_state.user)
-
         if not df_inv.empty:
             st.subheader("📋 Inventario actual")
             st.dataframe(df_inv)
-
             st.subheader("🛒 Venta")
-
             prod_sel = st.selectbox("Producto", df_inv["producto"])
             cant_v = st.number_input("Cantidad a vender", min_value=1.0)
 
             if st.button("Registrar venta"):
                 row = df_inv[df_inv["producto"] == prod_sel].iloc[0]
-
                 if row["cantidad"] >= cant_v:
-
                     actualizar_stock(st.session_state.user, prod_sel, cant_v)
-
-                    ingreso = cant_v * row["precio"]
-                    costo_v = cant_v * row["costo"]
-
-                    # CONTABILIDAD AUTOMÁTICA
-                    guardar_movimiento(st.session_state.user, {
-                        "fecha": str(date.today()),
-                        "tipo_cuenta": "ingreso",
-                        "cuenta": "ventas",
-                        "valor": ingreso,
-                        "naturaleza": "credito"
-                    })
-
-                    guardar_movimiento(st.session_state.user, {
-                        "fecha": str(date.today()),
-                        "tipo_cuenta": "activo",
-                        "cuenta": "bancos",
-                        "valor": ingreso,
-                        "naturaleza": "debito"
-                    })
-
-                    guardar_movimiento(st.session_state.user, {
-                        "fecha": str(date.today()),
-                        "tipo_cuenta": "costo",
-                        "cuenta": "costo de ventas",
-                        "valor": costo_v,
-                        "naturaleza": "debito"
-                    })
-
-                    guardar_movimiento(st.session_state.user, {
-                        "fecha": str(date.today()),
-                        "tipo_cuenta": "activo",
-                        "cuenta": "inventarios",
-                        "valor": costo_v,
-                        "naturaleza": "credito"
-                    })
-
+                    ingreso, costo_v = (cant_v * row["precio"]), (cant_v * row["costo"])
+                    
+                    asientos = [
+                        ("ingreso", "ventas", ingreso, "credito"),
+                        ("activo", "bancos", ingreso, "debito"),
+                        ("costo", "costo de ventas", costo_v, "debito"),
+                        ("activo", "inventarios", costo_v, "credito")
+                    ]
+                    for t, c, v, n in asientos:
+                        guardar_movimiento(st.session_state.user, {
+                            "fecha": str(date.today()), "tipo_cuenta": t, "cuenta": c, "valor": v, "naturaleza": n
+                        })
                     st.success("Venta registrada correctamente")
-
+                    st.rerun()
                 else:
                     st.error("Stock insuficiente")
 
-    # --------------------------
-    # REPORTES
-    # --------------------------
+    # --- SECCIÓN REPORTES (MEJORADA) ---
     elif menu == "Reportes":
-        st.title("📊 Estados Financieros")
-
+        st.title("📊 Estados Financieros Detallados")
         df = obtener_movimientos(st.session_state.user)
 
         if df.empty:
-            st.warning("No hay datos")
+            st.warning("No hay datos registrados para este usuario.")
         else:
             df["fecha"] = pd.to_datetime(df["fecha"])
             df["valor_ajustado"] = df.apply(calcular_valor, axis=1)
 
-            st.subheader("📈 Estado de Resultados")
+            t1, t2, t3 = st.tabs(["📉 Estado de Resultados", "⚖️ Balance General", "💸 Flujo de Caja"])
 
-            ingresos = df[df["tipo_cuenta"] == "ingreso"]["valor_ajustado"].sum()
-            costos = df[df["tipo_cuenta"] == "costo"]["valor_ajustado"].sum()
-            gastos = df[df["tipo_cuenta"] == "gasto"]["valor_ajustado"].sum()
+            with t1:
+                st.subheader("Resultados del Periodo")
+                df_res = df[df["tipo_cuenta"].isin(["ingreso", "costo", "gasto"])]
+                res_tabla = df_res.groupby(["tipo_cuenta", "cuenta"])["valor_ajustado"].sum().reset_index()
+                
+                ing_t = res_tabla[res_tabla["tipo_cuenta"]=="ingreso"]["valor_ajustado"].sum()
+                cos_t = res_tabla[res_tabla["tipo_cuenta"]=="costo"]["valor_ajustado"].sum()
+                gas_t = res_tabla[res_tabla["tipo_cuenta"]=="gasto"]["valor_ajustado"].sum()
+                utilidad_neta = ing_t - cos_t - gas_t
+                
+                st.table(res_tabla.rename(columns={"tipo_cuenta":"Tipo", "cuenta":"Cuenta", "valor_ajustado":"Saldo"}))
+                st.metric("Utilidad del Ejercicio", f"$ {utilidad_neta:,.2f}")
 
-            utilidad = ingresos - costos - gastos
+            with t2:
+                st.subheader("Situación Financiera")
+                df_bal = df[df["tipo_cuenta"].isin(["activo", "pasivo", "patrimonio"])]
+                bal_tabla = df_bal.groupby(["tipo_cuenta", "cuenta"])["valor_ajustado"].sum().reset_index()
+                
+                col_a, col_p = st.columns(2)
+                with col_a:
+                    st.write("**ACTIVOS**")
+                    st.table(bal_tabla[bal_tabla["tipo_cuenta"]=="activo"][["cuenta", "valor_ajustado"]])
+                    total_act = bal_tabla[bal_tabla["tipo_cuenta"]=="activo"]["valor_ajustado"].sum()
+                    st.write(f"**Total Activo: $ {total_act:,.2f}**")
 
-            st.write(f"Ingresos: {ingresos}")
-            st.write(f"Costos: {costos}")
-            st.write(f"Gastos: {gastos}")
-            st.success(f"Utilidad: {utilidad}")
+                with col_p:
+                    st.write("**PASIVO + PATRIMONIO**")
+                    pas_tab = bal_tabla[bal_tabla["tipo_cuenta"]=="pasivo"]
+                    pat_tab = bal_tabla[bal_tabla["tipo_cuenta"]=="patrimonio"]
+                    if not pas_tab.empty: st.table(pas_tab[["cuenta", "valor_ajustado"]])
+                    if not pat_tab.empty: st.table(pat_tab[["cuenta", "valor_ajustado"]])
+                    st.write(f"Utilidad Neta: $ {utilidad_neta:,.2f}")
+                    
+                    total_p_p = bal_tabla[bal_tabla["tipo_cuenta"].isin(["pasivo", "patrimonio"])]["valor_ajustado"].sum() + utilidad_neta
+                    st.write(f"**Total Pasivo + Pat: $ {total_p_p:,.2f}**")
+                
+                st.divider()
+                if abs(total_act - total_p_p) < 0.01: st.success("Balance Cuadrado ✅")
+                else: st.error("Balance Descuadrado ❌")
 
-            st.subheader("📊 Balance General")
-
-            activos = df[df["tipo_cuenta"] == "activo"]["valor_ajustado"].sum()
-            pasivos = df[df["tipo_cuenta"] == "pasivo"]["valor_ajustado"].sum()
-            patrimonio = df[df["tipo_cuenta"] == "patrimonio"]["valor_ajustado"].sum()
-
-            st.write(f"Activos: {activos}")
-            st.write(f"Pasivos: {pasivos}")
-            st.write(f"Patrimonio: {patrimonio}")
+            with t3:
+                st.subheader("Movimientos de Efectivo")
+                df_caja = df[df["cuenta"] == "bancos"].copy()
+                if not df_caja.empty:
+                    st.dataframe(df_caja[["fecha", "cuenta", "valor", "naturaleza"]], use_container_width=True)
+                    st.metric("Saldo Final en Bancos", f"$ {df_caja['valor_ajustado'].sum():,.2f}")
+                else:
+                    st.info("No se registran movimientos en la cuenta 'bancos'.")
