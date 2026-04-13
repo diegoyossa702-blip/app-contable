@@ -155,4 +155,20 @@ else:
             
             with t1:
                 ing = df[df["tipo_cuenta"] == "ingreso"]["valor_ajustado"].sum()
-                cos =
+                cos = df[df["tipo_cuenta"] == "costo"]["valor_ajustado"].sum()
+                gas = df[df["tipo_cuenta"] == "gasto"]["valor_ajustado"].sum()
+                utilidad = ing - cos - gas
+                st.metric("Utilidad Neta", f"$ {utilidad:,.2f}")
+
+            with t2:
+                act = df[df["tipo_cuenta"] == "activo"]["valor_ajustado"].sum()
+                pas = df[df["tipo_cuenta"] == "pasivo"]["valor_ajustado"].sum()
+                pat = df[df["tipo_cuenta"] == "patrimonio"]["valor_ajustado"].sum() + utilidad
+                st.write(f"**Activos:** {act:,.2f} | **Pasivos:** {pas:,.2f} | **Patrimonio:** {pat:,.2f}")
+                if round(act, 2) == round(pas + pat, 2): st.success("Balance Cuadrado")
+                else: st.error("Balance Descuadrado")
+
+            with t3:
+                df_caja = df[df["cuenta"] == "bancos"]
+                st.metric("Efectivo Neto", f"$ {df_caja['valor_ajustado'].sum():,.2f}")
+                st.dataframe(df_caja)
